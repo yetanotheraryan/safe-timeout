@@ -1,4 +1,4 @@
-# safe-timeout
+# safe-timeouts
 
 **Deadline-based timeouts for async Node.js code with AbortSignal support.**
 
