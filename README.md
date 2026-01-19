@@ -3,6 +3,7 @@
 **Deadline-based timeouts for async Node.js code with AbortSignal support.**
 
 ![NPM Version](https://img.shields.io/npm/v/safe-timeouts)
+![NPM Downloads](https://img.shields.io/npm/dw/safe-timeouts)
 ![GitHub package.json version](https://img.shields.io/github/package-json/v/yetanotheraryan/safe-timeouts?style=flat-square&color=blue)
 ![GitHub last commit](https://img.shields.io/github/last-commit/yetanotheraryan/safe-timeouts)
 ![GitHub contributors](https://img.shields.io/github/contributors/yetanotheraryan/safe-timeouts)
@@ -45,16 +46,20 @@ Node.js >= 16 is required.
 ## Basic usage
 
 ```ts
-import { withTimeout, TimeoutError } from "safe-timeouts";
+import { withTimeout, TimeoutError, safeAxios } from "safe-timeouts";
 import axios from "axios";
 
 try {
-  const result = await withTimeout(2000, async (signal) => {
-    const res = await axios.get("https://api.example.com/users", { signal });
+  const resultWithSafeAxios = await withTimeout(2000, async () => {
+    const res = await safeAxios.get("https://api.example.com/users"); // no signal to be passed.
     return res.data;
   });
 
-  console.log(result);
+  const resultWithAxios = await withTimeout(2000, async (signal) => { // signal to be taken.
+    const res = await axios.get("https://api.example.com/users", {signal}); // signal to be passed.
+    return res.data;
+  });
+
 } catch (err) {
   if (err instanceof TimeoutError) {
     console.error("Request timed out");
@@ -94,7 +99,77 @@ This makes time budgets safe and deterministic.
 
 ---
 
-## Using with services (multiple layers)
+## safeAxios (optional helper but recommended)
+
+`safeAxios` is a **convenience wrapper** around Axios that automatically integrates with safe-timeouts.
+
+When used inside withTimeout, HTTP requests are automatically cancellable.
+When used outside withTimeout, it behaves exactly like a normal Axios instance.
+
+Example
+```ts
+import { withTimeout, safeAxios } from "safe-timeouts";
+
+await withTimeout(2000, async () => {
+  const res = await safeAxios.get("/users");
+  return res.data;
+});
+```
+
+
+### Custom Axios instance can also be created
+```ts
+import { withTimeout, createSafeAxios } from "safe-timeouts";
+
+const api = createSafeAxios({
+  baseURL: "https://api.example.com",
+});
+
+await withTimeout(1000, async () => {
+  await api.post("/sync");
+});
+```
+
+## How it works (context propagation)
+
+safe-timeouts uses AsyncLocalStorage to propagate timeout context across async boundaries.
+
+Example flow
+```ts
+await withTimeout(2000, async () => {
+  await controller();
+});
+
+async function controller() {
+  return serviceA();
+}
+
+async function serviceA() {
+  return serviceB();
+}
+
+async function serviceB() {
+  return safeAxios.get("/users");
+}
+
+
+Context flow diagram
+withTimeout
+  └─ Async context (deadline + AbortController)
+       ├─ controller()
+       │    └─ serviceA()
+       │         └─ serviceB()
+       │              └─ safeAxios.get()
+       │                   └─ axios(request + signal)
+
+```
+The timeout context is created once
+Node automatically propagates it across async calls
+**safeAxios reads the context at request time When the deadline expires, the request is aborted**
+
+---
+
+## Using with services (multiple layers) without safeAxios
 
 ```ts
 import axios from "axios";
@@ -136,6 +211,20 @@ These stop execution as soon as the deadline is exceeded:
 Example:
 
 ```ts
+    // GET
+    await safeAxios.get(url); // 👈 No AbortSignal needed
+    // POST
+    await safeAxios.post(
+      url,
+      { name: "Aryan", role: "admin" },
+      {
+       // 👈 No AbortSignal goes here
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer YOUR_TOKEN",
+        },
+      })
+
     // GET
     await axios.get(url, { signal }); // 👈 AbortSignal goes here
     // POST
